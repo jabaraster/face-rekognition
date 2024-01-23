@@ -6,6 +6,7 @@ import {
 } from "@aws-sdk/client-rekognition";
 import { v4 as uuid } from "uuid";
 import Jimp from "jimp";
+import { setTimeout } from "timers/promises";
 
 const rekognition = new RekognitionClient({
     region: "ap-northeast-1",
@@ -31,7 +32,7 @@ export interface PersonallyIdentifiedFaceInPhoto extends FaceInPhoto {
     personalDescriptor: PersonalDescriptor;
 }
 
-export async function f(
+export async function extractPersonallyIdentifiedFaces(
     fileDescriptors: FileDescriptor[],
     loader: (fileDescriptor: FileDescriptor) => Promise<Buffer>,
 ): Promise<PersonallyIdentifiedFaceInPhoto[]> {
@@ -41,44 +42,16 @@ export async function f(
     return identifyPersonally(faces, filtered);
 }
 
-export function equalsFaces(lf: FaceInPhoto, rf: FaceInPhoto): boolean {
-    if (lf.photoFileDescriptor !== rf.photoFileDescriptor) return false;
-    if (lf.boundingBox.height < rf.boundingBox.height) {
-        if (lf.boundingBox.height / rf.boundingBox.height < 0.98) {
-            return false;
-        }
-    } else {
-        if (rf.boundingBox.height / lf.boundingBox.height < 0.98) {
-            return false;
-        }
-    }
-    // 幅も同様
-    if (lf.boundingBox.width < rf.boundingBox.width) {
-        if (lf.boundingBox.width / rf.boundingBox.width < 0.98) {
-            return false;
-        }
-    } else {
-        if (rf.boundingBox.width / lf.boundingBox.width < 0.98) {
-            return false;
-        }
-    }
-    // Topのずれが高さの2/100を超えたら同じ顔ではない
-    if (Math.abs(lf.boundingBox.top - rf.boundingBox.top) > lf.boundingBox.height * 0.02) {
-        return false;
-    }
-    // Leftも同様
-    if (Math.abs(lf.boundingBox.left - rf.boundingBox.left) > lf.boundingBox.width * 0.02) {
-        return false;
-    }
-    return true;
-}
-
 export async function extractFaces(
     fileDescriptors: FileDescriptor[],
     loader: (fileDescriptor: FileDescriptor) => Promise<Buffer>,
 ): Promise<FaceInPhoto[]> {
+    const counter = getCounter();
     const ps = await Promise.all(
         fileDescriptors.map(async (fileDescriptor) => {
+            const cnt = counter();
+            await setTimeout(200 * cnt);
+            console.log(`start extract faces: cnt: ${cnt} fileDescriptor: ${fileDescriptor}`);
             const ps = await rekognition.send(
                 new DetectFacesCommand({
                     Image: { Bytes: await loader(fileDescriptor) },
@@ -94,25 +67,6 @@ export async function extractFaces(
         }),
     );
     return ps.flat();
-}
-
-export async function compareFaces(
-    faces: FaceInPhoto[],
-    loader: (fileDescriptor: FileDescriptor) => Promise<Buffer>,
-): Promise<CompareFaceResult[]> {
-    const fileDescriptors = Array.from(new Set(faces.map((face) => face.photoFileDescriptor)));
-    const bufs: Map<FileDescriptor, Buffer> = await toBuffers(fileDescriptors, loader);
-    return (await Promise.all(faces.map((face) => compareFace(face, fileDescriptors, bufs)))).flat();
-}
-
-export function filter(src: CompareFaceResult[]): CompareFaceResult[] {
-    return src.filter((face, i) => {
-        if (equalsFaces(face.source, face.target)) return false;
-        const rvc = src.slice(i + 1).find((face2: any) => {
-            return equalsFaces(face.source, face2.target) && equalsFaces(face.target, face2.source);
-        });
-        return !rvc;
-    });
 }
 
 export function identifyPersonally(
@@ -148,13 +102,38 @@ export interface CompareFaceResult {
     target: FaceInPhoto;
     similarity: number;
 }
+
+// 呼び出すたびに1増えた数を返す関数を返す
+function getCounter(): () => number {
+    let cnt = 0;
+    return () => {
+        return cnt++;
+    };
+}
+
+export async function compareFaces(
+    faces: FaceInPhoto[],
+    loader: (fileDescriptor: FileDescriptor) => Promise<Buffer>,
+): Promise<CompareFaceResult[]> {
+    const fileDescriptors = Array.from(new Set(faces.map((face) => face.photoFileDescriptor)));
+    const bufs: Map<FileDescriptor, Buffer> = await toBuffers(fileDescriptors, loader);
+    const counter = getCounter();
+    return (await Promise.all(faces.map((face) => compareFace(face, fileDescriptors, bufs, counter)))).flat();
+}
+
 export async function compareFace(
     face: FaceInPhoto,
     fileDescriptors: FileDescriptor[],
     buffers: Map<FileDescriptor, Buffer>,
+    counter: () => number,
 ): Promise<CompareFaceResult[]> {
     const ary = await Promise.all(
         fileDescriptors.map(async (fileDescriptor) => {
+            const cnt = counter();
+            await setTimeout(200 * cnt);
+            console.log(
+                `start compare: cnt: ${cnt} face: ${face.photoFileDescriptor} fileDescriptor: ${fileDescriptor}`,
+            );
             const faceImg = await faceImage(face, buffers);
             const faceImgData = await new Promise<Buffer>((resolve, reject) => {
                 faceImg.getBuffer(Jimp.MIME_JPEG, async (err, buffer) => {
@@ -165,38 +144,53 @@ export async function compareFace(
                     }
                 });
             });
-            const ret = await rekognition.send(
-                new CompareFacesCommand({
-                    SourceImage: { Bytes: faceImgData },
-                    TargetImage: { Bytes: buffers.get(fileDescriptor)! },
-                }),
-            );
-            const ary0: CompareFaceResult[] = ret.FaceMatches!.map((faceMatch) => {
-                return {
-                    source: face,
-                    target: {
-                        photoFileDescriptor: fileDescriptor,
-                        boundingBox: b2b(faceMatch.Face!.BoundingBox!),
-                        confidence: faceMatch.Face!.Confidence!,
-                    },
-                    similarity: faceMatch.Similarity!,
-                };
-            });
-            const ary1: CompareFaceResult[] = ret.UnmatchedFaces!.map((unmatchedFace) => {
-                return {
-                    source: face,
-                    target: {
-                        photoFileDescriptor: fileDescriptor,
-                        boundingBox: b2b(unmatchedFace.BoundingBox!),
-                        confidence: unmatchedFace.Confidence!,
-                    },
-                    similarity: 0,
-                };
-            });
-            return ary0.concat(ary1);
+            try {
+                const ret = await rekognition.send(
+                    new CompareFacesCommand({
+                        SourceImage: { Bytes: faceImgData },
+                        TargetImage: { Bytes: buffers.get(fileDescriptor)! },
+                    }),
+                );
+                const ary0: CompareFaceResult[] = ret.FaceMatches!.map((faceMatch) => {
+                    return {
+                        source: face,
+                        target: {
+                            photoFileDescriptor: fileDescriptor,
+                            boundingBox: b2b(faceMatch.Face!.BoundingBox!),
+                            confidence: faceMatch.Face!.Confidence!,
+                        },
+                        similarity: faceMatch.Similarity!,
+                    };
+                });
+                const ary1: CompareFaceResult[] = ret.UnmatchedFaces!.map((unmatchedFace) => {
+                    return {
+                        source: face,
+                        target: {
+                            photoFileDescriptor: fileDescriptor,
+                            boundingBox: b2b(unmatchedFace.BoundingBox!),
+                            confidence: unmatchedFace.Confidence!,
+                        },
+                        similarity: 0,
+                    };
+                });
+                return ary0.concat(ary1);
+            } catch (e) {
+                console.error(e);
+                return [];
+            }
         }),
     );
     return ary.flat();
+}
+
+function filter(src: CompareFaceResult[]): CompareFaceResult[] {
+    return src.filter((face, i) => {
+        if (equalsFaces(face.source, face.target)) return false;
+        const rvc = src.slice(i + 1).find((face2: any) => {
+            return equalsFaces(face.source, face2.target) && equalsFaces(face.target, face2.source);
+        });
+        return !rvc;
+    });
 }
 
 function b2b(b: AWSBoundingBox): BoundingBox {
@@ -239,4 +233,36 @@ async function toBuffers(
         acc.set(cur.fileDescriptor, cur.buffer);
         return acc;
     }, new Map<FileDescriptor, Buffer>());
+}
+
+function equalsFaces(lf: FaceInPhoto, rf: FaceInPhoto): boolean {
+    if (lf.photoFileDescriptor !== rf.photoFileDescriptor) return false;
+    if (lf.boundingBox.height < rf.boundingBox.height) {
+        if (lf.boundingBox.height / rf.boundingBox.height < 0.98) {
+            return false;
+        }
+    } else {
+        if (rf.boundingBox.height / lf.boundingBox.height < 0.98) {
+            return false;
+        }
+    }
+    // 幅も同様
+    if (lf.boundingBox.width < rf.boundingBox.width) {
+        if (lf.boundingBox.width / rf.boundingBox.width < 0.98) {
+            return false;
+        }
+    } else {
+        if (rf.boundingBox.width / lf.boundingBox.width < 0.98) {
+            return false;
+        }
+    }
+    // Topのずれが高さの2/100を超えたら同じ顔ではない
+    if (Math.abs(lf.boundingBox.top - rf.boundingBox.top) > lf.boundingBox.height * 0.02) {
+        return false;
+    }
+    // Leftも同様
+    if (Math.abs(lf.boundingBox.left - rf.boundingBox.left) > lf.boundingBox.width * 0.02) {
+        return false;
+    }
+    return true;
 }
