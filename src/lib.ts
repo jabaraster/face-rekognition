@@ -57,13 +57,18 @@ export async function extractFaces(
                     Image: { Bytes: await loader(fileDescriptor) },
                 }),
             );
-            return ps.FaceDetails!.map((faceDetail) => {
-                return {
-                    photoFileDescriptor: fileDescriptor,
-                    boundingBox: b2b(faceDetail.BoundingBox!),
-                    confidence: faceDetail!.Confidence,
-                };
-            });
+            return ps
+                .FaceDetails!.filter((faceDetail) => {
+                    if (!faceDetail.Confidence) return false;
+                    return faceDetail.Confidence > 90;
+                })
+                .map((faceDetail) => {
+                    return {
+                        photoFileDescriptor: fileDescriptor,
+                        boundingBox: b2b(faceDetail.BoundingBox!),
+                        confidence: faceDetail!.Confidence,
+                    };
+                });
         }),
     );
     return ps.flat();
