@@ -3,8 +3,9 @@
     "version": "1.0.0",
     "license": "MIT",
     "scripts": {
-        "format": "yarn prettier --write src package.json .prettierrc",
-        "app": "ts-node src/app.ts"
+        "format": "yarn prettier --write src test package.json .prettierrc",
+        "app": "yarn ts-node src/app.ts",
+        "test": "yarn jest"
     },
     "dependencies": {
         "@aws-sdk/client-rekognition": "^3.496.0",
@@ -13,10 +14,13 @@
         "uuid": "^9.0.1"
     },
     "devDependencies": {
+        "@types/jest": "^29.5.11",
         "@types/jimp": "^0.2.28",
         "@types/uuid": "^9.0.7",
+        "jest": "^29.7.0",
         "parcel": "^2.11.0",
         "prettier": "^3.2.4",
+        "ts-jest": "^29.1.2",
         "ts-node": "^10.9.2"
     }
 }

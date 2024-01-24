@@ -1,12 +1,12 @@
 import {
-    RekognitionClient,
+    BoundingBox as AWSBoundingBox,
     CompareFacesCommand,
     DetectFacesCommand,
-    BoundingBox as AWSBoundingBox,
+    RekognitionClient,
 } from "@aws-sdk/client-rekognition";
-import { v4 as uuid } from "uuid";
 import Jimp from "jimp";
 import { setTimeout } from "timers/promises";
+import { v4 as uuid } from "uuid";
 
 const rekognition = new RekognitionClient({
     region: "ap-northeast-1",
@@ -188,7 +188,7 @@ export async function compareFace(
     return ary.flat();
 }
 
-function filter(src: CompareFaceResult[]): CompareFaceResult[] {
+export function filter(src: CompareFaceResult[]): CompareFaceResult[] {
     return src.filter((face, i) => {
         if (equalsFaces(face.source, face.target)) return false;
         const rvc = src.slice(i + 1).find((face2: any) => {

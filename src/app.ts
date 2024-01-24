@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
-import * as lib from "./lib";
-import { CompareFaceResult } from "./lib";
 import * as fs from "fs/promises";
+import * as lib from "./lib";
 
 dotenv.config();
 
